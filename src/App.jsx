@@ -343,13 +343,21 @@ const WEEK_DAYS = [
   "Lunedì (sett. 2)", "Martedì (sett. 2)", "Mercoledì (sett. 2)", "Giovedì (sett. 2)", "Venerdì (sett. 2)", "Sabato (sett. 2)", "Domenica (sett. 2)",
 ];
 
-// Struttura "scheletro" dei pasti: quante porzioni di ciascuna categoria entrano in pranzo/cena/fuori pasti,
+// Struttura "scheletro" dei pasti: quante porzioni di ciascuna categoria entrano in colazione/pranzo/cena/spuntini,
 // e quanto pesano in proporzione sul totale calorico giornaliero
 const MEAL_TEMPLATE = {
-  fuoripasti: { proteina: 0, carbo: 1, verdura: 0, spuntino: 2, grasso: 0, shareKcal: 0.28 },
-  pranzo: { proteina: 1, carbo: 1, verdura: 1, spuntino: 0, grasso: 1, shareKcal: 0.36 },
-  cena: { proteina: 1, carbo: 1, verdura: 1, spuntino: 0, grasso: 1, shareKcal: 0.36 },
+  colazione: { proteina: 0, carbo: 1, verdura: 0, spuntino: 1, grasso: 0, shareKcal: 0.2 },
+  spuntino_mattina: { proteina: 0, carbo: 0, verdura: 0, spuntino: 1, grasso: 0, shareKcal: 0.06 },
+  pranzo: { proteina: 1, carbo: 1, verdura: 1, spuntino: 0, grasso: 1, shareKcal: 0.34 },
+  spuntino_pomeriggio: { proteina: 0, carbo: 0, verdura: 0, spuntino: 1, grasso: 0, shareKcal: 0.06 },
+  cena: { proteina: 1, carbo: 1, verdura: 1, spuntino: 0, grasso: 1, shareKcal: 0.34 },
 };
+
+// Spuntini semplici e leggeri usati per gli "spuntini fuori pasto" (solo 1 alimento facile, niente combinazioni)
+const SIMPLE_SNACK_IDS = ["frutta", "yogurt_greco", "yogurt_soia", "skyr", "fiocchi_latte", "frutti_bosco", "uva_passa_datteri"];
+
+// Carboidrati adatti alla colazione (dolci/leggeri) — esclude pasta, riso, patate e altri carboidrati "da pasto principale"
+const BREAKFAST_CARB_IDS = ["avena", "pane_integrale", "pane_segale", "pane_di_segale_integrale", "crackers_integrali"];
 
 // Prezzo "medio" di un alimento (tra le 3 fasce), usato per stimarne il costo relativo
 function avgPrice(food) {
@@ -360,8 +368,14 @@ function avgPrice(food) {
 // se il budget giornaliero è basso, e più probabilità a quelli costosi se il budget è alto.
 // budgetLevel va da 0 (budget minimo) a 1 (budget alto/illimitato).
 // recentlyUsed = alimenti già usati nei giorni precedenti (per evitare ripetizioni troppo vicine nella settimana)
-function weightedPick(category, excluded, budgetLevel, alreadyUsedToday, recentlyUsed = []) {
+// allowedIds = se fornito, restringe la scelta solo a questi id (usato per colazione/spuntini, dove non tutti gli
+// alimenti della categoria hanno senso — es. niente pasta a colazione)
+function weightedPick(category, excluded, budgetLevel, alreadyUsedToday, recentlyUsed = [], allowedIds = null) {
   let pool = FOODS.filter((f) => f.cat === category && !excluded.includes(f.id));
+  if (allowedIds) {
+    const restrictedPool = pool.filter((f) => allowedIds.includes(f.id));
+    if (restrictedPool.length > 0) pool = restrictedPool;
+  }
   if (pool.length === 0) pool = FOODS.filter((f) => f.cat === category); // fallback se categoria svuotata dalle esclusioni
 
   // Prova prima ad evitare sia i ripetuti di oggi sia quelli usati nei giorni recenti
@@ -418,10 +432,21 @@ function buildDayPlan(excluded, kcalTarget, budgetLevel, recentlyUsed = []) {
   const rawPortions = [];
 
   Object.entries(MEAL_TEMPLATE).forEach(([pasto, template]) => {
+    const isSnackMeal = pasto === "spuntino_mattina" || pasto === "spuntino_pomeriggio";
+    const isColazione = pasto === "colazione";
     Object.entries(template).forEach(([cat, count]) => {
       if (cat === "shareKcal" || count === 0) return;
       for (let i = 0; i < count; i++) {
-        const food = weightedPick(cat, excluded, budgetLevel, usedToday, recentlyUsed);
+        // Determina la lista di alimenti ammessi in base al pasto e alla categoria:
+        // - spuntini fuori pasto: sempre alimenti semplici e veloci (frutta, yogurt...)
+        // - colazione, categoria "spuntino": stesso discorso, niente combinazioni elaborate
+        // - colazione, categoria "carbo": solo carboidrati da colazione (avena, pane), niente pasta/riso/patate
+        let allowedIds = null;
+        if (isSnackMeal) allowedIds = SIMPLE_SNACK_IDS;
+        else if (isColazione && cat === "spuntino") allowedIds = SIMPLE_SNACK_IDS;
+        else if (isColazione && cat === "carbo") allowedIds = BREAKFAST_CARB_IDS;
+
+        const food = weightedPick(cat, excluded, budgetLevel, usedToday, recentlyUsed, allowedIds);
         usedToday.push(food.id);
         rawPortions.push({ food, qty: baseQtyFor(food), pasto, mealShare: template.shareKcal });
       }
@@ -592,6 +617,7 @@ export default function DietPlanner() {
     <div style={{ fontFamily: "'Fraunces', Georgia, serif", background: "#D2BD9B", minHeight: "100vh", color: "#1F2A1E" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;700&display=swap');
+        * { box-sizing: border-box; }
         .sans { font-family: 'Space Grotesk', sans-serif; }
         .field { width: 100%; padding: 10px 12px; border: 1.5px solid #B39E7C; border-radius: 8px; background: #FBF6EC; font-family: 'Space Grotesk', sans-serif; font-size: 14px; color: #1F2A1E; }
         .field:focus { outline: none; border-color: #3E5C3A; }
@@ -807,7 +833,7 @@ function Section({ title, icon, children }) {
 }
 
 function Row({ children }) {
-  return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>{children}</div>;
+  return <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14 }}>{children}</div>;
 }
 
 function Field({ label, children }) {
@@ -828,6 +854,10 @@ function ResultView({ result, budget, onBack }) {
   const activeDay = weekPlan.days[selectedDay];
   const [editingItem, setEditingItem] = useState(null); // { dayIdx, itemIdx } o null
   const [showShoppingList, setShowShoppingList] = useState(false);
+  const [checkedItems, setCheckedItems] = useState({}); // { foodId: true/false }
+
+  const toggleChecked = (foodId) =>
+    setCheckedItems((prev) => ({ ...prev, [foodId]: !prev[foodId] }));
 
   // Sostituisce un alimento con un altro della stessa categoria, mantenendo i grammi/pezzi
   // e ricalcolando kcal/macro in base ai valori nutrizionali del nuovo alimento scelto
@@ -959,9 +989,11 @@ function ResultView({ result, budget, onBack }) {
 
         <div style={{ display: "grid", gap: 22 }}>
           {[
+            { key: "colazione", label: "Colazione" },
+            { key: "spuntino_mattina", label: "Spuntino di metà mattina" },
             { key: "pranzo", label: "Pranzo" },
+            { key: "spuntino_pomeriggio", label: "Spuntino del pomeriggio" },
             { key: "cena", label: "Cena" },
-            { key: "fuoripasti", label: "Fuori dai pasti" },
           ].map(({ key, label }) => {
             const mealItems = activeDay.plan.items.filter((i) => i.pasto === key);
             const mealKcal = mealItems.reduce((s, i) => s + i.kcal, 0);
@@ -1051,14 +1083,40 @@ function ResultView({ result, budget, onBack }) {
                       {catLabel}
                     </div>
                     <div style={{ display: "grid", gap: 5 }}>
-                      {entries.map(({ food, qty }) => (
-                        <div key={food.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                          <span>{food.name}</span>
-                          <span className="sans" style={{ color: "#7A8A6E" }}>
-                            {food.perEgg || food.perPiece ? `${Math.round(qty)} pz` : `${(qty / 1000).toFixed(2)} kg`}
-                          </span>
-                        </div>
-                      ))}
+                      {entries.map(({ food, qty }) => {
+                        const isChecked = !!checkedItems[food.id];
+                        return (
+                          <div
+                            key={food.id}
+                            onClick={() => toggleChecked(food.id)}
+                            style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14, cursor: "pointer", padding: "2px 0" }}
+                          >
+                            <div
+                              style={{
+                                width: 18,
+                                height: 18,
+                                borderRadius: 5,
+                                border: "1.5px solid #3E5C3A",
+                                background: isChecked ? "#3E5C3A" : "transparent",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                flexShrink: 0,
+                                color: "#F7F4ED",
+                                fontSize: 12,
+                              }}
+                            >
+                              {isChecked ? "✓" : ""}
+                            </div>
+                            <span style={{ flex: 1, textDecoration: isChecked ? "line-through" : "none", color: isChecked ? "#9A937F" : "#1F2A1E" }}>
+                              {food.name}
+                            </span>
+                            <span className="sans" style={{ color: "#7A8A6E" }}>
+                              {food.perEgg || food.perPiece ? `${Math.round(qty)} pz` : `${(qty / 1000).toFixed(2)} kg`}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
